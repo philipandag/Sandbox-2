@@ -14,6 +14,8 @@ class Fps
 	unsigned int updateDelayMs;
 	unsigned int desiredFramerate;
 	unsigned int desiredDelay;
+	
+	unsigned int backgroundDelayStart;
 
 	int currentFPS;
 public:
@@ -53,6 +55,11 @@ public:
 		frameStart = clock();
 	}
 
+	bool delayPassed()
+	{
+		return clock() - counterStart >= updateDelayMs;
+	}
+
 	void newFramerate(size_t rate)
 	{
 		desiredFramerate = rate;
@@ -65,6 +72,11 @@ public:
 
 	int getFPS() {
 		return currentFPS;
+	}
+
+	bool backgroundDelay()
+	{
+
 	}
 };
 

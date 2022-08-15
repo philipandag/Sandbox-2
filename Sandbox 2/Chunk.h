@@ -6,6 +6,7 @@
 #include "Cell.h"
 #include "AbstractMap.h"
 #include <algorithm>
+#include <mutex>
 using std::vector;
 
 const int EMPTY_FRAMES_DELETION_DELAY = 10;
@@ -15,6 +16,10 @@ const int DIRTY_RECT_BUFFER_SIZE = 2;
 
 class Chunk
 {
+private:
+	std::mutex filledCellCountMutex;
+	std::mutex changesMutex;
+	std::mutex workingRectMutex;
 public:
 	const Vector2 dimensions;
 	const Vector2 position;
@@ -101,14 +106,21 @@ public:
 		setCell(getIndex(x, y), cell);
 	}
 
+
 	void setCell(size_t index, Cell* cell)
 	{
 		if (cell->type != board[index]->type)
 		{
 			if (board[index]->type == CellType::EMPTY)
+			{
+				std::unique_lock lock(filledCellCountMutex);
 				cells++;
+			}
 			else
+			{
+				std::unique_lock lock(filledCellCountMutex);
 				cells--;
+			}
 			emptyFrames = 0;
 		}
 
@@ -118,7 +130,10 @@ public:
 
 	void moveCell(Chunk* source, size_t x, size_t y, size_t destX, size_t destY)
 	{
-		moveChanges.emplace_back(source, source->getIndex(x, y), getIndex(destX, destY));
+		size_t src = source->getIndex(x, y);
+		size_t dst = getIndex(destX, destY);
+		std::unique_lock lock(changesMutex);
+		moveChanges.emplace_back(source, src, dst);
 	}
 
 	void commit()
@@ -174,6 +189,8 @@ public:
 	{
 		int x = index % dimensions.x;
 		int y = index / dimensions.x;
+		
+		std::unique_lock lock(workingRectMutex);
 
 		dirtyRectX1W = clamp(std::min(x - DIRTY_RECT_BUFFER_SIZE, dirtyRectX1W), 0, dimensions.x-1);
 		dirtyRectY1W = clamp(std::min(y - DIRTY_RECT_BUFFER_SIZE, dirtyRectY1W), 0, dimensions.y-1);

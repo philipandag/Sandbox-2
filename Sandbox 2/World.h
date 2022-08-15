@@ -11,6 +11,9 @@
 #include <thread>
 #include "SimpleWorker.h"
 #include "Writer.h"
+#include <mutex>
+#include <functional>
+#include <concurrent_unordered_map.h>
 
 using std::vector;
 
@@ -22,9 +25,11 @@ struct pair_hash {
 };
 
 const int chunkDensity = 2; // amount of chunks in each axis, total amount = chunkDensity * chunkDensity
+							 // chunks of size 20x20 seem to be optimal
 
 class World
 {
+
 public:
 	const Vector2 dimensions;
 	const Vector2 chunkDimensions;
@@ -33,7 +38,8 @@ public:
 
 	SDL_Texture* texture;
 	std::vector<Chunk*> chunks;
-	std::unordered_map<std::pair<int, int>, Chunk*, pair_hash> chunkLookup;
+	Concurrency::concurrent_unordered_map<std::pair<int, int>, Chunk*, pair_hash> chunkLookup;
+	std::mutex chunkMutex;
 	MyRenderer& renderer;
 public:
 	World(Vector2 dimensions,
@@ -52,18 +58,22 @@ public:
 
 	void updateTexture()
 	{
+		SDL_SetRenderDrawColor(renderer.getRenderer(), 0, 0, 0, 255);
+		SDL_SetRenderTarget(renderer.getRenderer(), texture);
+		SDL_RenderFillRect(renderer.getRenderer(), NULL);
 		for (Chunk* p : chunks)
 		{
 			SDL_Rect rect;
-			rect.x = p->position.x * scale * chunkDimensions.x;
-			rect.y = p->position.y * scale * chunkDimensions.y;
-			rect.w = p->dimensions.x * scale;
-			rect.h = p->dimensions.y * scale;
+			rect.x = p->position.x * chunkDimensions.x;
+			rect.y = p->position.y * chunkDimensions.y;
+			rect.w = p->dimensions.x;
+			rect.h = p->dimensions.y;
 			SDL_RenderCopy(renderer.getRenderer(), p->getTexture(),
 				NULL, &rect);
 		}
-
+		
 		drawChunksVisualisation();
+		SDL_SetRenderTarget(renderer.getRenderer(), NULL);
 	}
 
 	void drawChunksVisualisation()
@@ -117,7 +127,22 @@ public:
 	void setCell(size_t x, size_t y, Cell* cell)
 	{
 		if (Chunk* chunk = getChunk(x, y))
+		{
 			chunk->setCell(x, y, cell);
+
+			int pingX=0, pingY=0;
+			if (x == chunk->position.x * chunk->dimensions.x) pingX = -1;
+			if (x == chunk->position.x * chunk->dimensions.x + chunk->dimensions.x - 1) pingX = 1;
+			if (y == chunk->position.y * chunk->dimensions.y) pingY = -1;
+			if (y == chunk->position.y * chunk->dimensions.y + chunk->dimensions.y - 1) pingY = 1;
+
+			if (pingX != 0)
+				keepAlive(x + pingX, y);
+			if (pingY != 0)
+				keepAlive(x, y + pingY);
+			if (pingX != 0 && pingY != 0)
+				keepAlive(x + pingX, y + pingY);
+		}
 	}
 
 	void keepAlive(int x, int y)
@@ -167,25 +192,56 @@ public:
 
 		Chunk* chunk = new Chunk(chunkDimensions, { lx, ly }, renderer);
 		chunkLookup.insert({ location, chunk });
-		chunks.push_back(chunk);
+
+		{
+			std::unique_lock lock(chunkMutex);
+			chunks.push_back(chunk);
+		}
 
 		return chunk;
 	}
 
 	void updateThreaded()
 	{
-		std::vector<std::thread> tasks(chunks.size());
-		for (int i = 0; i < chunks.size(); i++)
-			tasks[i] = std::thread([](World* w, Chunk* ch) {SimpleWorker(*w, ch).updateChunk(); }, this, chunks[i]);
-
-		for (int i = 0; i < tasks.size(); i++)
-			tasks[i].join();
+		std::mutex mutex;
+		std::condition_variable cond;
+		auto doForAllChunks = [&](std::function<void(Chunk*)> func)
+		{
+			int chunkCount = chunks.size();
+			std::vector<std::thread> tasks(chunks.size());
+			for (int i = 0; i < chunks.size(); i++)
+			{
+				Chunk* chunk = chunks[i];
+				tasks[i] = std::thread([&, chunk]() {
+					func(chunk);
+					{
+						std::unique_lock lock(mutex);
+						chunkCount--;
+					}
+					//cond.notify_one();
+					});
+			}
+			for (std::thread& th : tasks)
+				th.join();
+			{
+				std::unique_lock lock(mutex);
+				cond.wait(lock, [&]() {return chunkCount == 0; });
+			}
+		};
+		doForAllChunks([&](Chunk* chunk) {
+			SimpleWorker(*this, chunk).updateChunk();
+		});
+		doForAllChunks([&](Chunk* chunk) {
+			chunk->commit();
+			});
 	}
 
 	void updateNotThreaded()
 	{
 		for (int i = 0; i < chunks.size(); i++)
 			SimpleWorker(*this, chunks[i]).updateChunk();
+		for (Chunk* ch : chunks)
+			ch->commit();
 	}
 
 	void update()
@@ -193,18 +249,16 @@ public:
 		removeEmptyChunks();
 		cellsCount = 0;
 		
+		//updateThreaded();
 		updateNotThreaded();
 
-		for (Chunk* ch : chunks)
-			ch->commit();
+
 		for (Chunk* ch : chunks)
 		{
 			cellsCount += ch->getCellsCount();
 			ch->updateTexture();
 			ch->updateRect();
 		}
-		
-
 		updateTexture();
 	}
 
@@ -273,7 +327,8 @@ public:
 			Chunk* chunk = chunks[i];
 			if (chunk->empty())
 			{
-				chunkLookup.erase(std::pair<int,int>(chunk->position.x, chunk->position.y ));
+
+				chunkLookup.unsafe_erase(std::pair<int,int>(chunk->position.x, chunk->position.y ));
 				chunks.erase(chunks.begin() + i);
 				i--;
 				delete chunk;

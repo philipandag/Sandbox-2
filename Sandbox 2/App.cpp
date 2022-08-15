@@ -2,7 +2,8 @@
 
 App::App(const char* windowTitle, Vector2 windowDimensions, int framerate, double scale):
 	renderer(windowTitle, windowDimensions, windowFlags, rendererFlags),
-	fps(framerate),
+	fps(75),
+	simulationFps(framerate),
 	windowDimensions(windowDimensions),
 	world(windowDimensions, scale, renderer)
 {
@@ -14,6 +15,7 @@ App::App(const char* windowTitle, Vector2 windowDimensions, int framerate, doubl
 
 void App::handleInput()
 {
+	SDL_GetMouseState(&mousePos.x, &mousePos.y);
 	SDL_Event event;
 	while (SDL_PollEvent(&event))
 	{
@@ -61,6 +63,12 @@ void App::handleInput()
 			case SDLK_RIGHT:
 				paintRadius++;
 				break;
+			case SDLK_p:
+				if (fps.getDesiredFramerate() == 1)
+					newFramerate(10);
+				else
+					newFramerate(1);
+				break;
 			}
 			break;
 		case SDL_MOUSEWHEEL:
@@ -72,12 +80,10 @@ void App::handleInput()
 
 	if (LMBPressed)
 	{
-		int mousex, mousey;
-		SDL_GetMouseState(&mousex, &mousey);
-		int posx = mousex / world.scale;
-		int posy = mousey / world.scale;
-		for (size_t x = posx - paintRadius; x <= posx + paintRadius; x++)
-			for (size_t y = posy - paintRadius; y <= posy + paintRadius; y++) {
+		int posx = mousePos.x / world.scale;
+		int posy = mousePos.y / world.scale;
+		for (int x = posx - paintRadius; x <= posx + paintRadius; x++)
+			for (int y = posy - paintRadius; y <= posy + paintRadius; y++) {
 				if (world.canGoHere(x, y, toPlace))
 					world.setCell(x, y, toPlace);
 			}
@@ -99,22 +105,37 @@ void App::prepareScene()
 	world.update();
 }
 
-void App::presentScene()
+void App::drawCursor()
 {
-	//renderer.renderTexture(world.texture);
-	//SDL_Rect r;
-	//r.w = world.dimensions.x;
-	//r.h = world.dimensions.y;
-	//SDL_RenderCopy(renderer.getRenderer(), world.texture, NULL, NULL);
+	SDL_SetRenderDrawColor(renderer.getRenderer(), 255, 255, 255, 255);
+	SDL_Rect r;
+	r.x = (mousePos.x / static_cast<int>(world.scale)) * world.scale - (paintRadius)*world.scale;
+	r.y = (mousePos.y / static_cast<int>(world.scale)) * world.scale - (paintRadius)*world.scale;
+	r.w = (paintRadius * 2 + 1) * world.scale;
+	r.h = (paintRadius * 2 + 1) * world.scale;
+	SDL_RenderDrawRect(renderer.getRenderer(), &r);
+}
+
+void App::drawGui()
+{
 	char text[128];
 	sprintf_s(text, "Cells count: %d\nChunks count: %d\nFPS: %d/%d\nBrush size: %d\nMaterial: %s",
 		world.cellsCount, world.chunks.size(), fps.getFPS(), fps.getDesiredFramerate(), paintRadius, toPlace->name);
 	renderer.write(text);
 
-	SDL_RenderPresent(renderer.getRenderer());
+	drawCursor();
+}
+
+void App::presentScene()
+{
 	renderer.setColor({ 0,0,0,0 });
 	renderer.fill();
-	fps++;
+	
+	
+
+	//SDL_RenderCopy(renderer.getRenderer(), world.texture, NULL, NULL);
+	drawGui();
+	SDL_RenderPresent(renderer.getRenderer());
 }
 
 void App::start()
@@ -123,9 +144,14 @@ void App::start()
 	while (running)
 	{
 		handleInput();
-		prepareScene();
+		if (simulationFps.delayPassed())
+		{
+			prepareScene();
+			simulationFps++;
+		}
 		fps.delay();
 		presentScene();
+		fps++;
 	}
 }
 

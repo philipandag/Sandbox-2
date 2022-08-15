@@ -11,7 +11,7 @@ class App
 	Vector2 windowDimensions;
 	MyRenderer renderer;
 	Fps fps;
-	int desiredFramerate;
+	Fps simulationFps;
 	double desiredFramerateDelayMs;
 	int frames;
 	clock_t lastFrameTime;
@@ -20,12 +20,17 @@ class App
 	World world;
 	bool LMBPressed = false;
 	Cell* toPlace = &SAND;
+	Vector2 mousePos;
 public:
 	App(const char* windowTitle, Vector2 windowDimensions, int framerate = 120, double scale = 1);
 
 	void handleInput();
 
 	MyRenderer& getRenderer();
+
+	void drawCursor();
+
+	void drawGui();
 
 	void prepareScene();
 
